@@ -11,7 +11,7 @@ import string
 import subprocess
 import shlex
 import random
-from urllib.parse import urlparse
+import urllib.request
 
 DEFAULT_API_HOST = "api.opalstack.com"
 API_URL_ENV = os.environ.get("API_URL", f"https://{DEFAULT_API_HOST}")
@@ -93,34 +93,18 @@ def gen_password(length=32):
     return "".join(secrets.choice(chars) for _ in range(length))
 
 
-def download(url, localfile, writemode="wb", perms=0o600):
+def download(url, localfile, perms=0o600):
     logging.info(f"Downloading {url} as {localfile}")
-    u = urlparse(url)
-    conn = http.client.HTTPSConnection(u.netloc) if u.scheme == "https" else http.client.HTTPConnection(u.netloc)
-    path = u.path
-    while True:
-        conn.request("GET", path)
-        r = conn.getresponse()
-        if r.status in (301, 302, 303, 307, 308):
-            location = r.getheader("Location")
-            r.read()
-            logging.info(f"Following redirect to {location}")
-            lu = urlparse(location)
-            if lu.netloc and lu.netloc != u.netloc:
-                conn.close()
-                conn = http.client.HTTPSConnection(lu.netloc) if lu.scheme == "https" else http.client.HTTPConnection(lu.netloc)
-                u = lu
-            path = lu.path or path
-            continue
-        break
-    with open(localfile, writemode) as f:
+    req = urllib.request.Request(url, headers={"User-Agent": "opalstack-installer"})
+    with urllib.request.urlopen(req) as r, open(localfile, "wb") as f:
         while True:
             data = r.read(8192)
             if not data:
                 break
             f.write(data)
     os.chmod(localfile, perms)
-    logging.info(f"Downloaded {url} as {localfile}")
+    size = os.path.getsize(localfile)
+    logging.info(f"Downloaded {url} as {localfile} ({size} bytes)")
 
 
 def run_command(cmd, cwd=None, env=None):
