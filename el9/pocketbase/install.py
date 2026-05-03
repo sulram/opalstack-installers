@@ -11,6 +11,8 @@ import string
 import subprocess
 import shlex
 import random
+import re
+import time
 import urllib.request
 
 DEFAULT_API_HOST = "api.opalstack.com"
@@ -263,11 +265,36 @@ def main():
     # ---- start once ----
     run_command(f"{appdir}/start")
 
-    # ---- mark app installed ----
-    payload = json.dumps([{"id": args.app_uuid}])
-    api.post("/app/installed/", payload)
+    # ---- grab first-superuser install URL from log (printed only when no superuser exists) ----
+    logfile = f"{logsdir}/pocketbase.log"
+    install_path = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if os.path.exists(logfile):
+            with open(logfile) as f:
+                m = re.search(r"/_/#/pbinstall/\S+", f.read())
+                if m:
+                    install_path = m.group(0)
+                    break
+        time.sleep(0.5)
 
-    logging.info(f"Completed installation of PocketBase app {appname}")
+    if install_path:
+        msg = (
+            f"PocketBase installed for app {appname} on 127.0.0.1:{port}. "
+            f"Open https://<your-site>{install_path} to create the first superuser, "
+            f"or run: {appdir}/pocketbase superuser upsert EMAIL PASS"
+        )
+    else:
+        msg = (
+            f"PocketBase installed for app {appname} on 127.0.0.1:{port}. "
+            f"Create the first superuser by running: {appdir}/pocketbase superuser upsert EMAIL PASS"
+        )
+
+    # ---- mark app installed + push dashboard notice ----
+    api.post("/app/installed/", json.dumps([{"id": args.app_uuid}]))
+    api.post("/notice/create/", json.dumps([{"type": "D", "content": msg}]))
+
+    logging.info(f"Completed installation of PocketBase app {appname} - {msg}")
 
 
 if __name__ == "__main__":
