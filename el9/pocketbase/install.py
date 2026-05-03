@@ -7,12 +7,11 @@ import http.client
 import json
 import textwrap
 import secrets
+import socket
 import string
 import subprocess
 import shlex
 import random
-import re
-import time
 import urllib.request
 
 DEFAULT_API_HOST = "api.opalstack.com"
@@ -262,33 +261,21 @@ def main():
     cron_line = f"0{m},1{m},2{m},3{m},4{m},5{m} * * * * {appdir}/start > /dev/null 2>&1"
     add_cronjob(cron_line)
 
+    # ---- create initial superuser before first start ----
+    su_email = f"{osuser}@{socket.gethostname()}"
+    su_pass = gen_password(24)
+    run_command(
+        f"{appdir}/pocketbase superuser upsert {su_email} {su_pass}",
+        cwd=appdir,
+    )
+
     # ---- start once ----
     run_command(f"{appdir}/start")
 
-    # ---- grab first-superuser install URL from log (printed only when no superuser exists) ----
-    logfile = f"{logsdir}/pocketbase.log"
-    install_path = None
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        if os.path.exists(logfile):
-            with open(logfile) as f:
-                m = re.search(r"/_/#/pbinstall/\S+", f.read())
-                if m:
-                    install_path = m.group(0)
-                    break
-        time.sleep(0.5)
-
-    if install_path:
-        msg = (
-            f"PocketBase installed for app {appname} on 127.0.0.1:{port}. "
-            f"Open https://<your-site>{install_path} to create the first superuser, "
-            f"or run: {appdir}/pocketbase superuser upsert EMAIL PASS"
-        )
-    else:
-        msg = (
-            f"PocketBase installed for app {appname} on 127.0.0.1:{port}. "
-            f"Create the first superuser by running: {appdir}/pocketbase superuser upsert EMAIL PASS"
-        )
+    msg = (
+        f"PocketBase installed for app {appname} on 127.0.0.1:{port}. "
+        f"Initial superuser: {su_email}, password: {su_pass}"
+    )
 
     # ---- mark app installed + push dashboard notice ----
     api.post("/app/installed/", json.dumps([{"id": args.app_uuid}]))
