@@ -11,7 +11,6 @@ import socket
 import string
 import subprocess
 import shlex
-import random
 import urllib.request
 
 DEFAULT_API_HOST = "api.opalstack.com"
@@ -184,7 +183,7 @@ def main():
     run_command(f"rm -f {zip_path}")
     os.chmod(f"{appdir}/pocketbase", 0o700)
 
-    # ---- start (idempotent; called by cron too) ----
+    # ---- start (idempotent watchdog; run once here and every 2 min via cron) ----
     start_script = textwrap.dedent(
         f"""\
         #!/bin/bash
@@ -193,21 +192,66 @@ def main():
         APPDIR="{appdir}"
         PIDFILE="$APPDIR/pocketbase.pid"
         LOGFILE="{logsdir}/pocketbase.log"
+        WATCHDOG_LOG="{logsdir}/watchdog.log"
         PORT="{port}"
 
+        # Log size ceilings (bytes). Opalstack rotates ~/logs by AGE (7 days),
+        # not by size, so we cap by size here to survive a busy or crash-looping
+        # day. Pure coreutils -- no logrotate (Opalstack is managed, no root).
+        PB_LOG_MAX=10485760   # 10 MB -- PocketBase stdout/stderr
+        WD_LOG_MAX=1048576    #  1 MB -- watchdog events (~10-15k lines)
+
+        now() {{ date -u +%Y-%m-%dT%H:%M:%SZ; }}
+
+        # Truncate "$1" in place to its last "$2" bytes, PRESERVING the inode so a
+        # process holding the file open (nohup + O_APPEND) keeps writing to the
+        # same file. Keeps the most recent lines (a log's tail is what matters).
+        truncate_tail() {{
+          local file="$1" max="$2" tmp size
+          [ -f "$file" ] || return 0
+          size="$(wc -c < "$file")"
+          if [ "$size" -gt "$max" ]; then
+            tmp="$(mktemp "$file.XXXXXX")"
+            tail -c "$max" "$file" > "$tmp"
+            cat "$tmp" > "$file"   # '>' truncates in place: same inode, live fd stays valid
+            rm -f "$tmp"
+          fi
+          return 0
+        }}
+
+        # Runs on every watchdog tick regardless of process state: caps the log
+        # even while PocketBase is healthy and appending to it.
+        truncate_tail "$LOGFILE" "$PB_LOG_MAX"
+
+        # Idempotent: healthy -> stay silent and exit; dead/first-run -> (re)start.
         if [ -f "$PIDFILE" ]; then
           PID="$(cat "$PIDFILE" || true)"
           if [ -n "$PID" ] && ps -p "$PID" >/dev/null 2>&1; then
-            echo "PocketBase already running (PID $PID) on port $PORT"
             exit 0
           fi
+          MODE="RESURRECT"
+          STALE_PID="$PID"
           rm -f "$PIDFILE"
+        else
+          MODE="START"
+          STALE_PID=""
         fi
 
         cd "$APPDIR"
         nohup ./pocketbase serve --http="127.0.0.1:$PORT" --dir="$APPDIR/pb_data" >>"$LOGFILE" 2>&1 &
         NEW_PID=$!
         echo "$NEW_PID" > "$PIDFILE"
+
+        # Leave a trace ONLY on events worth investigating: first start and
+        # resurrections. Healthy minutes log nothing. Two RESURRECT lines a
+        # minute apart == crash loop; one line in months == a harmless hiccup.
+        truncate_tail "$WATCHDOG_LOG" "$WD_LOG_MAX"
+        if [ "$MODE" = "RESURRECT" ]; then
+          echo "$(now)  RESURRECT  process was dead (stale pid ${{STALE_PID:-unknown}}) -- restarted as $NEW_PID" >> "$WATCHDOG_LOG"
+        else
+          echo "$(now)  START      first start -- running as $NEW_PID" >> "$WATCHDOG_LOG"
+        fi
+
         echo "Started PocketBase (PID $NEW_PID) on port $PORT"
         """
     )
@@ -256,9 +300,11 @@ def main():
     )
     create_file(f"{appdir}/stop", stop_script, perms=0o700)
 
-    # ---- cron watchdog (every 10 minutes, randomized minute) ----
-    m = random.randint(0, 9)
-    cron_line = f"0{m},1{m},2{m},3{m},4{m},5{m} * * * * {appdir}/start > /dev/null 2>&1"
+    # ---- cron watchdog (every 2 minutes; start is idempotent and cheap) ----
+    # 2-min interval bounds silent downtime to ~2min instead of ~10min while
+    # staying gentler than a 1-min cron. The start script logs only first-start
+    # and resurrections, so a healthy process produces no cron noise.
+    cron_line = f"*/2 * * * * {appdir}/start > /dev/null 2>&1"
     add_cronjob(cron_line)
 
     # ---- create initial superuser before first start ----

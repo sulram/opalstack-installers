@@ -4,7 +4,7 @@
   "badge": "PB",
   "tagline": "Open source backend in 1 file",
   "color": "info",
-  "notes": "PocketBase is an open source backend with built-in SQLite database, authentication, file storage, and admin dashboard. The installer creates an initial superuser — log in at https://yourdomain.com/_/ with the credentials shown in your dashboard notice. Data lives in ~/apps/{app_name}/pb_data/. A cron job runs every 10 minutes to keep the process alive.",
+  "notes": "PocketBase is an open source backend with built-in SQLite database, authentication, file storage, and admin dashboard. The installer creates an initial superuser — log in at https://yourdomain.com/_/ with the credentials shown in your dashboard notice. Data lives in ~/apps/{app_name}/pb_data/. A cron watchdog runs every 2 minutes to keep the process alive; unexpected restarts are recorded in ~/logs/apps/{app_name}/watchdog.log.",
   "github": "https://github.com/sulram/opalstack-installers",
   "url": {
     "el9": "https://raw.githubusercontent.com/sulram/opalstack-installers/pocketbase/el9/pocketbase/install.py"
